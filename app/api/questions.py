@@ -9,9 +9,15 @@ from app.schemas.question import QuestionResponse
 from app.schemas.response import ResponseCreate, ResponseModel
 from app.api.auth import get_current_user
 from app.models.user import User
+import json
+import google.generativeai as genai
+from typing import List
+from pydantic import BaseModel
+from app.core.config import settings
 
 router = APIRouter()
 
+genai.configure(api_key=settings.GEMINI_API_KEY)
 def enforce_daily_limit(user: User, db: Session):
     # Enforce 230-question reset at UTC midnight
     now_utc = datetime.now(timezone.utc)
@@ -63,3 +69,53 @@ def submit_answer(
     db.commit()
     db.refresh(new_response)
     return new_response
+
+class GenerateQuestionResponse(BaseModel):
+    vignette: str
+    options: List[str]
+    correctAnswer: str
+    explanation: str
+
+@router.post("/generate", response_model=GenerateQuestionResponse)
+def generate_question(current_user: User = Depends(get_current_user)):
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    prompt = """
+    You are an expert medical educator writing questions for Canadian medical licensing exams (MCCQE Part 1 / TDM).
+    Generate a challenging, high-quality clinical vignette at this difficulty level. 
+    It must include:
+    - A detailed patient presentation, history, and relevant lab/imaging findings.
+    - 5 plausible multiple-choice options (A to E) assessing diagnosis, next step in management, or underlying pathophysiology.
+    - The correct answer.
+    - A thorough explanation of why the correct answer is right and why the distractors are wrong.
+    
+    You MUST output ONLY valid, raw JSON with absolutely NO markdown formatting, NO html formatting, NO code blocks, and NO extra text.
+    The JSON must strictly match this exact schema:
+    {
+      "vignette": "The clinical scenario...",
+      "options": [
+        "A. Option one",
+        "B. Option two",
+        "C. Option three",
+        "D. Option four",
+        "E. Option five"
+      ],
+      "correctAnswer": "A",
+      "explanation": "The clinical rationale for the correct answer."
+    }
+    """
+    
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        
+        question_data = json.loads(response.text)
+        return question_data
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate medical vignette: {str(e)}"
+        )
