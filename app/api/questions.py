@@ -78,7 +78,7 @@ class GenerateQuestionResponse(BaseModel):
 
 @router.post("/generate", response_model=GenerateQuestionResponse)
 def generate_question():
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
     
     prompt = """
     You are an expert medical educator writing questions for Canadian medical licensing exams (MCCQE Part 1 / TDM).
