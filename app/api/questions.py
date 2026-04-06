@@ -77,7 +77,7 @@ class GenerateQuestionResponse(BaseModel):
     explanation: str
 
 @router.post("/generate", response_model=GenerateQuestionResponse)
-def generate_question(current_user: User = Depends(get_current_user)):
+def generate_question():
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = """
