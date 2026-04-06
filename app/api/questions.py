@@ -115,6 +115,7 @@ def generate_question():
         return question_data
 
     except Exception as e:
+        print(f"Gemini AI Generation Error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate medical vignette: {str(e)}"
