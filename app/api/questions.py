@@ -14,6 +14,7 @@ import google.generativeai as genai
 from typing import List
 from pydantic import BaseModel
 from app.core.config import settings
+import google.api_core.exceptions
 
 router = APIRouter()
 
@@ -78,7 +79,11 @@ class GenerateQuestionResponse(BaseModel):
 
 @router.post("/generate", response_model=GenerateQuestionResponse)
 def generate_question():
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    import google.generativeai as genai
+    genai.configure(api_key=settings.GEMINI_API_KEY)
+    
+    model = genai.GenerativeModel(model_name='gemini-2.0-flash')
+    print(f'Using Model: {model.model_name}')
     
     prompt = """
     You are an expert medical educator writing questions for Canadian medical licensing exams (MCCQE Part 1 / TDM).
@@ -114,6 +119,19 @@ def generate_question():
         question_data = json.loads(response.text)
         return question_data
 
+    except google.api_core.exceptions.NotFound as e:
+        print(f"Gemini AI Generation 404 Error: {str(e)}")
+        print("Available models:")
+        try:
+            for m in genai.list_models():
+                print(m.name)
+        except Exception as list_e:
+            print(f"Could not list models: {str(list_e)}")
+            
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gemini API Model Not Found: {str(e)}"
+        )
     except Exception as e:
         print(f"Gemini AI Generation Error: {str(e)}")
         raise HTTPException(
