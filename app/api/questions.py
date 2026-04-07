@@ -10,14 +10,13 @@ from app.schemas.response import ResponseCreate, ResponseModel
 from app.api.auth import get_current_user
 from app.models.user import User
 import json
-import groq
+from groq import Groq
+import os
 from typing import List
 from pydantic import BaseModel
 from app.core.config import settings
 
 router = APIRouter()
-
-genai.configure(api_key=settings.GEMINI_API_KEY)
 def enforce_daily_limit(user: User, db: Session):
     # Enforce 230-question reset at UTC midnight
     now_utc = datetime.now(timezone.utc)
@@ -104,7 +103,7 @@ def generate_question():
     """
     
     try:
-        client = groq.Groq(api_key=settings.GROQ_API_KEY)
+        client = Groq(api_key=os.environ.get('GROQ_API_KEY'))
         
         chat_completion = client.chat.completions.create(
             messages=[
