@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "a_very_secret_key_for_jwt_tokens"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    GEMINI_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
 
     class Config:
         env_file = ".env"

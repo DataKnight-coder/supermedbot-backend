@@ -10,11 +10,10 @@ from app.schemas.response import ResponseCreate, ResponseModel
 from app.api.auth import get_current_user
 from app.models.user import User
 import json
-import google.generativeai as genai
+import groq
 from typing import List
 from pydantic import BaseModel
 from app.core.config import settings
-import google.api_core.exceptions
 
 router = APIRouter()
 
@@ -79,12 +78,6 @@ class GenerateQuestionResponse(BaseModel):
 
 @router.post("/generate", response_model=GenerateQuestionResponse)
 def generate_question():
-    import google.generativeai as genai
-    genai.configure(api_key=settings.GEMINI_API_KEY)
-    
-    model = genai.GenerativeModel(model_name='gemini-2.0-flash')
-    print(f'Using Model: {model.model_name}')
-    
     prompt = """
     You are an expert medical educator writing questions for Canadian medical licensing exams (MCCQE Part 1 / TDM).
     Generate a challenging, high-quality clinical vignette at this difficulty level. 
@@ -111,29 +104,29 @@ def generate_question():
     """
     
     try:
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
+        client = groq.Groq(api_key=settings.GROQ_API_KEY)
+        
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You must output valid JSON only, exactly matching the requested schema."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            model="llama-3.3-70b-versatile",
+            response_format={"type": "json_object"}
         )
         
-        question_data = json.loads(response.text)
+        raw_text = chat_completion.choices[0].message.content
+        question_data = json.loads(raw_text)
         return question_data
 
-    except google.api_core.exceptions.NotFound as e:
-        print(f"Gemini AI Generation 404 Error: {str(e)}")
-        print("Available models:")
-        try:
-            for m in genai.list_models():
-                print(m.name)
-        except Exception as list_e:
-            print(f"Could not list models: {str(list_e)}")
-            
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gemini API Model Not Found: {str(e)}"
-        )
     except Exception as e:
-        print(f"Gemini AI Generation Error: {str(e)}")
+        print(f"Groq API Error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate medical vignette: {str(e)}"
