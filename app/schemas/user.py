@@ -10,6 +10,7 @@ class UserCreate(UserBase):
 
 class UserResponse(UserBase):
     id: UUID
+    is_approved: bool
     created_at: datetime
     
     class Config:

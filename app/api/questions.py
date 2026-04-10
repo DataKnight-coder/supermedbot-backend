@@ -10,8 +10,9 @@ from app.schemas.response import ResponseCreate, ResponseModel
 from app.api.auth import get_current_user
 from app.models.user import User
 import json
-from groq import Groq
+from groq import Groq, AsyncGroq
 import os
+import asyncio
 from typing import List
 from pydantic import BaseModel
 from app.core.config import settings
@@ -69,37 +70,156 @@ def submit_answer(
     db.refresh(new_response)
     return new_response
 
+class GenerateRequest(BaseModel):
+    category: str
+    mode: str = "practice"
+    count: int = 1
+
 class GenerateQuestionResponse(BaseModel):
     vignette: str
     options: List[str]
-    correctAnswer: str
+    correct_answer: str
     explanation: str
 
-@router.post("/generate", response_model=GenerateQuestionResponse)
-def generate_question():
-    prompt = """
-    You are an expert medical educator writing questions for Canadian medical licensing exams (MCCQE Part 1 / TDM).
-    Generate a challenging, high-quality clinical vignette at this difficulty level. 
-    It must include:
-    - A detailed patient presentation, history, and relevant lab/imaging findings.
-    - 5 plausible multiple-choice options (A to E) assessing diagnosis, next step in management, or underlying pathophysiology.
-    - The correct answer.
-    - A thorough explanation of why the correct answer is right and why the distractors are wrong.
+class GenerateBatchResponse(BaseModel):
+    questions: List[GenerateQuestionResponse]
+
+@router.post("/generate", response_model=GenerateBatchResponse)
+async def generate_question(request: GenerateRequest):
+    tutor_logic = ""
+    sprint_logic = ""
+    tdm_logic = ""
+    batch_mode_logic = ""
+    mode_lower = request.mode.lower()
+    cat_lower = request.category.lower()
     
-    You MUST output ONLY valid, raw JSON with absolutely NO markdown formatting, NO html formatting, NO code blocks, and NO extra text.
-    The JSON must strictly match this exact schema:
-    {
-      "vignette": "The clinical scenario...",
+    if mode_lower == "tutor":
+        tutor_logic = "- Mention specific Canadian guidelines where applicable (e.g., SOGC, CPS, PHAC, Choosing Wisely Canada)."
+        
+    if mode_lower == "timed sprint":
+        sprint_logic = "- Sprint Format: Keep the vignette highly concise (max 150 words). Focus strictly on 'Key Findings' and 'Next Best Step'. Avoid any unnecessary filler data to allow rapid 30-minute block processing.\n"
+        
+    persona = "a Chief Examiner for the Therapeutic Decision-Making (TDM) and MCCQE1 boards"
+    if cat_lower == "emergency":
+        persona = "an ER Chief Examiner for the Therapeutic Decision-Making (TDM) and MCCQE1 boards"
+    elif cat_lower == "cleo":
+        persona = "a Medical Ethicist, Legal Consultant, and Chief Examiner for the Therapeutic Decision-Making (TDM) and MCCQE1 boards"
+    elif cat_lower == "public health":
+        persona = "a Medical Officer of Health and Chief Examiner for the Therapeutic Decision-Making (TDM) and MCCQE1 boards"
+
+    if cat_lower == "tdm":
+        tdm_logic = "\n- TDM Specificity: Force high-complexity therapeutic scenarios. Include contraindications (e.g., prescribing in renal failure or pregnancy), drug-drug interactions, and side-effect management. Use Canadian brand names alongside generics (e.g., 'paliperidone palmitate (Invega)')."
+        batch_mode_logic = "This session represents a 140-question high-difficulty therapeutic focus sprint."
+    else:
+        batch_mode_logic = "This session represents a 40-question clinical focus sprint."
+
+    async def fetch_chunk(chunk_size: int):
+        prompt = f"""
+1. Role & Context:
+Act as {persona}. Your goal is to generate high-fidelity, high-yield clinical vignettes for the MCCQE Part I and TDM exams. {batch_mode_logic}
+You MUST generate EXACTLY {chunk_size} distinctly different clinical vignettes matching the criteria below.
+
+2. Content Standards:
+- Units: Strictly use SI Units (e.g., mmol/L for glucose, g/L for protein, μmol/L for creatinine).
+- Structure: Every vignette must include Patient Age/Sex, Chief Complaint, HPI (Duration/Quality), relevant Physical Exam findings (Vitals/Signs), and Laboratory/Imaging results. Keep vignettes concise but loaded with 'distractor' clinical data (comorbidities, current medications).
+{sprint_logic}- Category Logic: The requested category is '{request.category}'. Strictly constrain the scenario to this domain. For 'CLEO', focus on consent, capacity, and legal disclosure.{tdm_logic}
+
+3. Question Difficulty & Requirements:
+- Prohibit simple recall. Every question must require clinical analysis or management decisions. Focus on: 'Next best step,' 'Initial investigation of choice,' and 'Most appropriate pharmacotherapy.'
+- Provide 5 distinct options (A through E). Ensure distractors are plausible but incorrect.
+
+4. Explanations:
+- The 'Explanation' must be exactly two sentences: The first sentence explains the correct physiological/clinical path; the second explains why the most tempting distractor was wrong.
+{tutor_logic}
+
+5. Response Format:
+Strictly return ONLY valid JSON matching this schema exactly:
+{{
+  "questions": [
+    {{
+      "vignette": "...",
       "options": [
-        "A. Option one",
-        "B. Option two",
-        "C. Option three",
-        "D. Option four",
-        "E. Option five"
+        "A. ...",
+        "B. ...",
+        "C. ...",
+        "D. ...",
+        "E. ..."
       ],
-      "correctAnswer": "A",
-      "explanation": "The clinical rationale for the correct answer."
-    }
+      "correct_answer": "A",
+      "explanation": "..."
+    }}
+  ]
+}}
+"""
+        
+        client = AsyncGroq(api_key=os.environ.get('GROQ_API_KEY'))
+        chat_completion = await client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You must output valid JSON only, exactly matching the requested schema."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            model="llama-3.3-70b-versatile",
+            response_format={"type": "json_object"}
+        )
+        
+        raw_text = chat_completion.choices[0].message.content
+        return json.loads(raw_text).get("questions", [])
+
+    try:
+        max_chunk = 5
+        chunks = [max_chunk] * (request.count // max_chunk)
+        if request.count % max_chunk > 0:
+            chunks.append(request.count % max_chunk)
+            
+        tasks = [fetch_chunk(size) for size in chunks]
+        results = await asyncio.gather(*tasks)
+        
+        all_questions = []
+        for res in results:
+            all_questions.extend(res)
+            
+        return {"questions": all_questions}
+
+    except Exception as e:
+        print(f"Groq API Error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate medical vignette: {str(e)}"
+        )
+
+class MissedQuestion(BaseModel):
+    category: str
+    vignette: str | None = None
+
+class SessionSummaryRequest(BaseModel):
+    missed_questions: List[MissedQuestion]
+
+class SessionSummaryResponse(BaseModel):
+    feedback: str
+
+@router.post("/session-summary", response_model=SessionSummaryResponse)
+def generate_session_summary(request: SessionSummaryRequest):
+    prompt = f"""
+    You are a Senior Canadian Medical Educator acting as a Consultant.
+    The user has just finished a challenging MCCQE1 exam sprint.
+    Here is the data on the questions they missed (categories and vignettes):
+    {request.model_dump_json()}
+    
+    Generate a precise, 3-sentence 'Consultant's Feedback' summarizing their performance based on these gaps.
+    Point out their weaknesses specifically by referencing the missed categories. Give actionable advice (e.g., if they missed CLEO, tell them to review CMPA guidelines).
+    
+    Example of the tone: 'You demonstrated strong diagnostic skills overall, but your management of legal consent (CLEO) requires review of the CMPA guidelines. Focus more on capacity assessments.'
+    
+    You MUST output ONLY valid, raw JSON exactly matching this schema:
+    {{
+        "feedback": "Your 3-sentence feedback here."
+    }}
     """
     
     try:
@@ -121,12 +241,12 @@ def generate_question():
         )
         
         raw_text = chat_completion.choices[0].message.content
-        question_data = json.loads(raw_text)
-        return question_data
+        summary_data = json.loads(raw_text)
+        return summary_data
 
     except Exception as e:
-        print(f"Groq API Error: {str(e)}")
+        print(f"Groq API Summary Error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate medical vignette: {str(e)}"
+            detail=f"Failed to generate session summary: {str(e)}"
         )
