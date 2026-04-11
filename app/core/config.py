@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     GROQ_API_KEY: str = ""
     ADMIN_SECRET_KEY: str = "change_me_in_production"
+    SUPER_ADMIN_KEY: str = "super_secret_for_remote_management"
 
     class Config:
         env_file = ".env"

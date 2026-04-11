@@ -76,7 +76,7 @@ class GenerateRequest(BaseModel):
     count: int = 1
 
 class GenerateQuestionResponse(BaseModel):
-    vignette: str
+    question_text: str
     options: List[str]
     correct_answer: str
     explanation: str
@@ -137,7 +137,7 @@ Strictly return ONLY valid JSON matching this schema exactly:
 {{
   "questions": [
     {{
-      "vignette": "...",
+      "question_text": "...",
       "options": [
         "A. ...",
         "B. ...",
@@ -153,23 +153,53 @@ Strictly return ONLY valid JSON matching this schema exactly:
 """
         
         client = AsyncGroq(api_key=os.environ.get('GROQ_API_KEY'))
-        chat_completion = await client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You must output valid JSON only, exactly matching the requested schema."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"}
-        )
+        
+        system_message = "You MUST return a JSON object with the keys: 'questions' containing 'question_text', 'options' (a list of strings), 'correct_answer' and 'explanation'. Do not include any conversational filler."
+        
+        messages = [
+            {
+                "role": "system",
+                "content": system_message
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+        
+        try:
+            chat_completion = await client.chat.completions.create(
+                messages=messages,
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"}
+            )
+        except Exception as e:
+            if "429" in str(e) or "rate" in str(e).lower():
+                print(f"Rate limit (429) hit on 70b-versatile. Automatically falling back to llama-3.1-8b-instant...")
+                chat_completion = await client.chat.completions.create(
+                    messages=messages,
+                    model="llama-3.1-8b-instant",
+                    response_format={"type": "json_object"}
+                )
+            else:
+                raise e
+        
         
         raw_text = chat_completion.choices[0].message.content
-        return json.loads(raw_text).get("questions", [])
+        print(f"RAW AI RESPONSE: {raw_text}")
+        
+        try:
+            parsed_json = json.loads(raw_text)
+            qs = parsed_json.get("questions", [])
+            for q in qs:
+                # Cleanup logic: If correct_answer says "Option A" or "A.", strip it down to just "A"
+                if "correct_answer" in q:
+                    ans = q["correct_answer"]
+                    q["correct_answer"] = ans.replace("Option", "").replace(".", "").strip()
+            return qs
+        except Exception as e:
+            print(f"Failed to parse JSON chunk: {e}")
+            return []
 
     try:
         max_chunk = 5
@@ -195,7 +225,7 @@ Strictly return ONLY valid JSON matching this schema exactly:
 
 class MissedQuestion(BaseModel):
     category: str
-    vignette: str | None = None
+    question_text: str | None = None
 
 class SessionSummaryRequest(BaseModel):
     missed_questions: List[MissedQuestion]
