@@ -13,6 +13,7 @@ import json
 from groq import Groq, AsyncGroq
 import os
 import asyncio
+import re
 from typing import List
 from pydantic import BaseModel
 from app.core.config import settings
@@ -154,7 +155,7 @@ Strictly return ONLY valid JSON matching this schema exactly:
         
         client = AsyncGroq(api_key=os.environ.get('GROQ_API_KEY'))
         
-        system_message = "You MUST return a JSON object with the keys: 'questions' containing 'question_text', 'options' (a list of strings), 'correct_answer' and 'explanation'. Do not include any conversational filler."
+        system_message = 'You are a medical examiner. Return ONLY a JSON object with the key "questions", which is a list. Each question must have: "question_text", "options" (list of 5 strings), "correct_answer" (string), and "explanation" (string).'
         
         messages = [
             {
@@ -189,7 +190,13 @@ Strictly return ONLY valid JSON matching this schema exactly:
         print(f"RAW AI RESPONSE: {raw_text}")
         
         try:
-            parsed_json = json.loads(raw_text)
+            match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            if match:
+                json_str = match.group(0)
+            else:
+                json_str = raw_text
+                
+            parsed_json = json.loads(json_str)
             qs = parsed_json.get("questions", [])
             for q in qs:
                 # Cleanup logic: If correct_answer says "Option A" or "A.", strip it down to just "A"
@@ -199,7 +206,7 @@ Strictly return ONLY valid JSON matching this schema exactly:
             return qs
         except Exception as e:
             print(f"Failed to parse JSON chunk: {e}")
-            return []
+            raise Exception(f"JSON Parsing Error. Could not parse AI response: {str(e)}. Raw output: {raw_text[:200]}...")
 
     try:
         max_chunk = 5
