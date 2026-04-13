@@ -82,10 +82,7 @@ class GenerateQuestionResponse(BaseModel):
     correct_answer: str
     explanation: str
 
-class GenerateBatchResponse(BaseModel):
-    questions: List[GenerateQuestionResponse]
-
-@router.post("/generate", response_model=GenerateBatchResponse)
+@router.post("/generate", response_model=List[GenerateQuestionResponse])
 async def generate_question(request: GenerateRequest):
     tutor_logic = ""
     sprint_logic = ""
@@ -203,6 +200,16 @@ Strictly return ONLY valid JSON matching this schema exactly:
                 if "correct_answer" in q:
                     ans = q["correct_answer"]
                     q["correct_answer"] = ans.replace("Option", "").replace(".", "").strip()
+                
+                # Cleanup logic: Strip 'A. ', 'B) ' prefixes from options
+                if "options" in q and isinstance(q["options"], list):
+                    clean_opts = []
+                    for opt in q["options"]:
+                        # Remove like "A. ", "A) ", "Option A. " etc.
+                        clean_opt = re.sub(r'^(Option\s+)?[A-E][.\)]\s*', '', opt.strip(), flags=re.IGNORECASE)
+                        clean_opts.append(clean_opt)
+                    q["options"] = clean_opts
+                    
             return qs
         except Exception as e:
             print(f"Failed to parse JSON chunk: {e}")
@@ -221,7 +228,7 @@ Strictly return ONLY valid JSON matching this schema exactly:
         for res in results:
             all_questions.extend(res)
             
-        return {"questions": all_questions}
+        return all_questions
 
     except Exception as e:
         print(f"Groq API Error: {str(e)}")
