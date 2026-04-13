@@ -79,8 +79,8 @@ class GenerateRequest(BaseModel):
 class GenerateQuestionResponse(BaseModel):
     question_text: str
     options: List[str]
-    correct_answer: str
-    explanation: str
+    correct_answer: str = "A"
+    explanation: str = ""
 
 @router.post("/generate", response_model=List[GenerateQuestionResponse])
 async def generate_question(request: GenerateRequest):
@@ -187,14 +187,17 @@ Strictly return ONLY valid JSON matching this schema exactly:
         print(f"RAW AI RESPONSE: {raw_text}")
         
         try:
-            match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            match = re.search(r'(\[.*\]|\{.*\})', raw_text, re.DOTALL)
             if match:
                 json_str = match.group(0)
             else:
                 json_str = raw_text
                 
             parsed_json = json.loads(json_str)
-            qs = parsed_json.get("questions", [])
+            if isinstance(parsed_json, list):
+                qs = parsed_json
+            else:
+                qs = parsed_json.get("questions", [])
             for q in qs:
                 # Cleanup logic: If correct_answer says "Option A" or "A.", strip it down to just "A"
                 if "correct_answer" in q:
