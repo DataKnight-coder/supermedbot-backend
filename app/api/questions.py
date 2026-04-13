@@ -130,21 +130,22 @@ You MUST generate EXACTLY {chunk_size} distinctly different clinical vignettes m
 - The 'Explanation' must be exactly two sentences: The first sentence explains the correct physiological/clinical path; the second explains why the most tempting distractor was wrong.
 {tutor_logic}
 
-5. Response Format:
-Strictly return ONLY valid JSON matching this schema exactly:
+5. Response Format (CRITICAL):
+Return ONLY a valid JSON object. No markdown, no extra text, no code block fences.
+Use exactly this schema:
 {{
   "questions": [
     {{
-      "question_text": "...",
+      "question_text": "Concise clinical vignette + question here.",
       "options": [
-        "A. ...",
-        "B. ...",
-        "C. ...",
-        "D. ...",
-        "E. ..."
+        "Administer X",
+        "Order Y",
+        "Prescribe Z",
+        "Refer to W",
+        "Observe and reassess"
       ],
       "correct_answer": "A",
-      "explanation": "..."
+      "explanation": "One sentence why correct. One sentence why top distractor is wrong."
     }}
   ]
 }}
@@ -152,7 +153,14 @@ Strictly return ONLY valid JSON matching this schema exactly:
         
         client = AsyncGroq(api_key=os.environ.get('GROQ_API_KEY'))
         
-        system_message = 'You are a medical examiner. Return ONLY a JSON object with the key "questions", which is a list. Each question must have: "question_text", "options" (list of 5 strings), "correct_answer" (string), and "explanation" (string).'
+        system_message = (
+            'You are a fast, precise medical examiner generating MCCQE1 and TDM exam questions. '
+            'Prioritize Clinical Reasoning and Next Best Step questions. Keep vignettes concise (under 120 words). '
+            'Return ONLY a valid JSON object with a single key "questions" containing a list. '
+            'Each item must have: "question_text" (string), "options" (list of exactly 5 plain strings WITHOUT A/B/C/D/E prefixes), '
+            '"correct_answer" (single uppercase letter A-E only), and "explanation" (two sentences max). '
+            'No markdown, no code fences, no extra commentary.'
+        )
         
         messages = [
             {
@@ -168,12 +176,13 @@ Strictly return ONLY valid JSON matching this schema exactly:
         try:
             chat_completion = await client.chat.completions.create(
                 messages=messages,
-                model="llama-3.3-70b-versatile",
+                model="llama-3.1-8b-instant",
                 response_format={"type": "json_object"}
             )
         except Exception as e:
             if "429" in str(e) or "rate" in str(e).lower():
-                print(f"Rate limit (429) hit on 70b-versatile. Automatically falling back to llama-3.1-8b-instant...")
+                print(f"Rate limit hit on 8b-instant. Retrying with a short delay...")
+                await asyncio.sleep(2)
                 chat_completion = await client.chat.completions.create(
                     messages=messages,
                     model="llama-3.1-8b-instant",
@@ -230,7 +239,7 @@ Strictly return ONLY valid JSON matching this schema exactly:
             raise Exception(f"JSON Parsing Error. Could not parse AI response: {str(e)}. Raw output: {raw_text[:200]}...")
 
     try:
-        max_chunk = 5
+        max_chunk = 10  # 8b-instant handles larger chunks comfortably
         chunks = [max_chunk] * (request.count // max_chunk)
         if request.count % max_chunk > 0:
             chunks.append(request.count % max_chunk)
