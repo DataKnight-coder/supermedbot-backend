@@ -77,9 +77,9 @@ class GenerateRequest(BaseModel):
     count: int = 1
 
 class GenerateQuestionResponse(BaseModel):
-    question_text: str
+    text: str = ""
     options: List[str]
-    correct_answer: str = "A"
+    correctAnswer: str = "A"
     explanation: str = ""
 
 @router.post("/generate", response_model=List[GenerateQuestionResponse])
@@ -198,22 +198,33 @@ Strictly return ONLY valid JSON matching this schema exactly:
                 qs = parsed_json
             else:
                 qs = parsed_json.get("questions", [])
+            final_list = []
             for q in qs:
+                text_val = q.get("question_text", "")
+                correct_ans = q.get("correct_answer", "A")
+                
                 # Cleanup logic: If correct_answer says "Option A" or "A.", strip it down to just "A"
-                if "correct_answer" in q:
-                    ans = q["correct_answer"]
-                    q["correct_answer"] = ans.replace("Option", "").replace(".", "").strip()
+                correct_ans = correct_ans.replace("Option", "").replace(".", "").strip()
                 
                 # Cleanup logic: Strip 'A. ', 'B) ' prefixes from options
+                clean_opts = []
                 if "options" in q and isinstance(q["options"], list):
-                    clean_opts = []
                     for opt in q["options"]:
                         # Remove like "A. ", "A) ", "Option A. " etc.
-                        clean_opt = re.sub(r'^(Option\s+)?[A-E][.\)]\s*', '', opt.strip(), flags=re.IGNORECASE)
+                        clean_opt = re.sub(r'^(Option\s+)?[A-E][.\)]\s*', '', str(opt).strip(), flags=re.IGNORECASE)
                         clean_opts.append(clean_opt)
-                    q["options"] = clean_opts
+                elif "options" in q:
+                    clean_opts = q["options"]
                     
-            return qs
+                final_q = {
+                    "text": text_val,
+                    "options": clean_opts,
+                    "correctAnswer": correct_ans,
+                    "explanation": q.get("explanation", "")
+                }
+                final_list.append(final_q)
+                    
+            return final_list
         except Exception as e:
             print(f"Failed to parse JSON chunk: {e}")
             raise Exception(f"JSON Parsing Error. Could not parse AI response: {str(e)}. Raw output: {raw_text[:200]}...")
@@ -230,6 +241,9 @@ Strictly return ONLY valid JSON matching this schema exactly:
         all_questions = []
         for res in results:
             all_questions.extend(res)
+            
+        if all_questions:
+            print(f"OUTGOING DATA TO UI: {all_questions[0]}")
             
         return all_questions
 
