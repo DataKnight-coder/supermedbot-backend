@@ -10,7 +10,7 @@ from app.schemas.response import ResponseCreate, ResponseModel
 from app.api.auth import get_current_user
 from app.models.user import User
 import json
-from groq import Groq, AsyncGroq
+from openai import OpenAI, AsyncOpenAI
 import os
 import asyncio
 import re
@@ -136,7 +136,7 @@ Use exactly this schema:
 {{
   "questions": [
     {{
-      "question_text": "Concise clinical vignette + question here.",
+      "text": "Concise clinical vignette + question here.",
       "options": [
         "Administer X",
         "Order Y",
@@ -144,21 +144,21 @@ Use exactly this schema:
         "Refer to W",
         "Observe and reassess"
       ],
-      "correct_answer": "A",
+      "correctAnswer": "A",
       "explanation": "One sentence why correct. One sentence why top distractor is wrong."
     }}
   ]
 }}
 """
         
-        client = AsyncGroq(api_key=os.environ.get('GROQ_API_KEY'))
+        client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         
         system_message = (
             'You are a fast, precise medical examiner generating MCCQE1 and TDM exam questions. '
             'Prioritize Clinical Reasoning and Next Best Step questions. Keep vignettes concise (under 120 words). '
             'Return ONLY a valid JSON object with a single key "questions" containing a list. '
-            'Each item must have: "question_text" (string), "options" (list of exactly 5 plain strings WITHOUT A/B/C/D/E prefixes), '
-            '"correct_answer" (single uppercase letter A-E only), and "explanation" (two sentences max). '
+            'Each item must have: "text" (string), "options" (list of exactly 5 plain strings WITHOUT A/B/C/D/E prefixes), '
+            '"correctAnswer" (single uppercase letter A-E only), and "explanation" (two sentences max). '
             'No markdown, no code fences, no extra commentary.'
         )
         
@@ -176,16 +176,16 @@ Use exactly this schema:
         try:
             chat_completion = await client.chat.completions.create(
                 messages=messages,
-                model="llama-3.1-8b-instant",
+                model="gpt-4o-mini",
                 response_format={"type": "json_object"}
             )
         except Exception as e:
             if "429" in str(e) or "rate" in str(e).lower():
-                print(f"Rate limit hit on 8b-instant. Retrying with a short delay...")
+                print(f"Rate limit hit on gpt-4o-mini. Retrying with a short delay...")
                 await asyncio.sleep(2)
                 chat_completion = await client.chat.completions.create(
                     messages=messages,
-                    model="llama-3.1-8b-instant",
+                    model="gpt-4o-mini",
                     response_format={"type": "json_object"}
                 )
             else:
@@ -209,17 +209,16 @@ Use exactly this schema:
                 qs = parsed_json.get("questions", [])
             final_list = []
             for q in qs:
-                text_val = q.get("question_text", "")
-                correct_ans = q.get("correct_answer", "A")
+                text_val = q.get("text", q.get("question_text", ""))
+                correct_ans = q.get("correctAnswer", q.get("correct_answer", "A"))
                 
-                # Cleanup logic: If correct_answer says "Option A" or "A.", strip it down to just "A"
+                # Cleanup logic: If correctAnswer says "Option A" or "A.", strip it down to just "A"
                 correct_ans = correct_ans.replace("Option", "").replace(".", "").strip()
                 
                 # Cleanup logic: Strip 'A. ', 'B) ' prefixes from options
                 clean_opts = []
                 if "options" in q and isinstance(q["options"], list):
                     for opt in q["options"]:
-                        # Remove like "A. ", "A) ", "Option A. " etc.
                         clean_opt = re.sub(r'^(Option\s+)?[A-E][.\)]\s*', '', str(opt).strip(), flags=re.IGNORECASE)
                         clean_opts.append(clean_opt)
                 elif "options" in q:
@@ -257,7 +256,7 @@ Use exactly this schema:
         return all_questions
 
     except Exception as e:
-        print(f"Groq API Error: {str(e)}")
+        print(f"OpenAI API Error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate medical vignette: {str(e)}"
@@ -293,7 +292,7 @@ def generate_session_summary(request: SessionSummaryRequest):
     """
     
     try:
-        client = Groq(api_key=os.environ.get('GROQ_API_KEY'))
+        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         
         chat_completion = client.chat.completions.create(
             messages=[
@@ -306,7 +305,7 @@ def generate_session_summary(request: SessionSummaryRequest):
                     "content": prompt
                 }
             ],
-            model="llama-3.3-70b-versatile",
+            model="gpt-4o-mini",
             response_format={"type": "json_object"}
         )
         
@@ -315,7 +314,7 @@ def generate_session_summary(request: SessionSummaryRequest):
         return summary_data
 
     except Exception as e:
-        print(f"Groq API Summary Error: {str(e)}")
+        print(f"OpenAI API Summary Error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate session summary: {str(e)}"
